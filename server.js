@@ -2,32 +2,20 @@ import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
 import twilio from "twilio";
-import cors from "cors";          // ⭐ YENİ EKLEDİK
 
 const app = express();
-
-// --- MIDDLEWARELER ---
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-// ⭐ TÜM ORİJİNLERE CORS İZNİ VER
-app.use(
-  cors({
-    origin: "*",                  // İstersen buraya ileride kendi domainini yazarsın
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"]
-  })
-);
-
-// --- ENV ---
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const TWILIO_SID = process.env.TWILIO_SID;
 const TWILIO_AUTH = process.env.TWILIO_AUTH;
+const TWILIO_PHONE = process.env.TWILIO_PHONE;
 
 const client = twilio(TWILIO_SID, TWILIO_AUTH);
 
 // ---------------------------------------------
-// OPENAI TTS (Kadın sesi)
+// OPENAI TTS
 // ---------------------------------------------
 async function generateSpeech(text) {
   try {
@@ -51,14 +39,15 @@ async function generateSpeech(text) {
     );
 
     return Buffer.from(response.data).toString("base64");
+
   } catch (err) {
-    console.error("[Alya] Ses hatası:", err.response?.data || err.message);
+    console.error("[Alya] Ses hatası:", err);
     return null;
   }
 }
 
 // ---------------------------------------------
-// TWILIO → /call  (Webhook)
+// TWILIO /call WEBHOOK
 // ---------------------------------------------
 app.post("/call", async (req, res) => {
   try {
@@ -74,21 +63,9 @@ app.post("/call", async (req, res) => {
           {
             role: "system",
             content: `
-Sen Alya adında sıcak, kadınsı, profesyonel bir satış asistanısın.
-Pronet için iş yerlerini arıyorsun.
-
-Görevlerin:
-- Randevu almak
-- Randevu sonrası 3 soru sormak:
-1) Adınız neydi?
-2) Alarm/Kamera sisteminiz var mı?
-3) Karar verici siz misiniz, ortak var mı?
-
-Cevapların KISA olsun (10–12 kelime).
-Üslubun samimi ve ikna edici olsun.
-Fiyat verme.
-Konu dışına çıkma.
-            `
+Sen Alya adında sıcak, kadınsı bir satış asistanısın.
+Konuşmalar kısa ve net olsun.
+`
           },
           {
             role: "user",
@@ -104,15 +81,11 @@ Konu dışına çıkma.
       }
     );
 
-    const alyaReply = aiRes.data.choices[0].message.content?.trim() || "Merhaba, ben Alya.";
-
-    console.log("[Alya]:", alyaReply);
-
+    const alyaReply = aiRes.data.choices[0].message.content;
     const audioBase64 = await generateSpeech(alyaReply);
 
     if (!audioBase64) {
-      res.type("text/xml");
-      return res.send(`<Response><Say>Bir hata oluştu, daha sonra tekrar deneyelim.</Say></Response>`);
+      return res.send(`<Response><Say>Hata oluştu.</Say></Response>`);
     }
 
     const twiml = `
@@ -123,16 +96,17 @@ Konu dışına çıkma.
     `;
 
     res.type("text/xml");
-    return res.send(twiml);
+    res.send(twiml);
+
   } catch (err) {
-    console.error("CALL HATASI:", err.response?.data || err.message);
+    console.error("CALL HATASI:", err);
     res.type("text/xml");
-    return res.send(`<Response><Say>Sunucu hatası oluştu.</Say></Response>`);
+    res.send(`<Response><Say>Sunucu hatası oluştu.</Say></Response>`);
   }
 });
 
 // ---------------------------------------------
-// OUTBOUND ARAMA → Panelin kullandığı endpoint
+// OUTBOUND ARAMA
 // ---------------------------------------------
 app.post("/call-customer", async (req, res) => {
   try {
@@ -142,20 +116,17 @@ app.post("/call-customer", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Telefon numarası gerekli." });
     }
 
-    console.log("OUTBOUND ARAMA İSTEK:", phone);
-
     const call = await client.calls.create({
       to: phone,
-      from: "+14706655724",              // Twilio'dan aldığın NUMARA
+      from: TWILIO_PHONE,  
       url: "https://alya-call-system.onrender.com/call"
     });
 
-    console.log("OUTBOUND ARAMA BAŞLADI:", call.sid);
+    res.json({ ok: true, callSid: call.sid });
 
-    return res.json({ ok: true, callSid: call.sid });
   } catch (err) {
-    console.error("OUTBOUND CALL ERROR:", err.response?.data || err.message);
-    return res.status(500).json({ ok: false, error: "Arama başlatılamadı." });
+    console.error("OUTBOUND CALL ERROR:", err);
+    res.status(500).json({ ok: false, error: "Arama başlatılamadı." });
   }
 });
 
@@ -163,7 +134,8 @@ app.post("/call-customer", async (req, res) => {
 app.get("/", (req, res) => res.send("Alya sistemi aktif ✔"));
 // ---------------------------------------------
 
-const PORT = process.env.PORT || 10000;
+// ⭐ DOĞRU PORT ⭐
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Alya çalışıyor → PORT ${PORT}`);
 });
