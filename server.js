@@ -63,8 +63,8 @@ app.post("/call", async (req, res) => {
           {
             role: "system",
             content: `
-Sen Alya adında sıcak, kadınsı bir satış asistanısın.
-Konuşmalar kısa ve net olsun.
+Sen Alya adında sıcak, kadınsı, profesyonel bir satış asistanısın.
+Konuşmaların kısa ve net olsun.
 `
           },
           {
@@ -118,7 +118,7 @@ app.post("/call-customer", async (req, res) => {
 
     const call = await client.calls.create({
       to: phone,
-      from: TWILIO_PHONE,  
+      from: TWILIO_PHONE, // ← doğru numara buraya bağlandı
       url: "https://alya-call-system.onrender.com/call"
     });
 
@@ -126,6 +126,7 @@ app.post("/call-customer", async (req, res) => {
 
   } catch (err) {
     console.error("OUTBOUND CALL ERROR:", err);
+    console.log("Detay:", err.message);
     res.status(500).json({ ok: false, error: "Arama başlatılamadı." });
   }
 });
