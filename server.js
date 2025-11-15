@@ -54,9 +54,8 @@ app.post("/call", async (req, res) => {
       model: "gpt-4o-mini",
       messages: [
         {
-          role: "system",
-          content: `
-            
+
+          
 {
   role: "system",
   content: `
@@ -69,6 +68,7 @@ Doğrudan konuya gir.
 Müşteriden randevu almaya odaklan.
 `
 },
+
         {
           role: "user",
           content: userSentence
