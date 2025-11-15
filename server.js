@@ -134,7 +134,7 @@ app.post("/call-customer", async (req, res) => {
 
     const call = await client.calls.create({
       to: phone,
-      from: "+905302511091",   // SANA AİT VERIFIED NUMARA
+      from: "+905302511091",
       url: "https://alya-call-system.onrender.com/call"
     });
 
@@ -150,6 +150,8 @@ app.post("/call-customer", async (req, res) => {
 app.get("/", (req, res) => res.send("Alya sistemi aktif ✔"));
 // ---------------------------------------------
 
-app.listen(10000, () =>
-  console.log("Alya OpenAI – Twilio sistemi çalışıyor → PORT 10000")
+const PORT = process.env.PORT || 10000;
+
+app.listen(PORT, () =>
+  console.log(`Alya OpenAI – Twilio sistemi çalışıyor → PORT ${PORT}`)
 );
