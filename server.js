@@ -1,130 +1,160 @@
 import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
+import twilio from "twilio";
 
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const TWILIO_SID = process.env.TWILIO_SID;
+const TWILIO_AUTH = process.env.TWILIO_AUTH;
 
-// -----------------------------------------------------
-// TTS FONKSİYONU (MP3 FORMATINDA)
-// -----------------------------------------------------
+// Twilio client
+const client = twilio(TWILIO_SID, TWILIO_AUTH);
+
+// ---------------------------------------------------------
+// 1) OPENAI TTS (Metinden ses üretme)
+// ---------------------------------------------------------
 async function generateSpeech(text) {
   try {
+    console.log("[Alya] TTS isteği gönderiliyor...");
+
     const response = await axios.post(
       "https://api.openai.com/v1/audio/speech",
       {
         model: "gpt-4o-mini-tts",
         voice: "alloy",
         input: text,
-        format: "mp3"   // ← ← ÖNEMLİ: MP3 FORMAT
+        format: "wav"
       },
       {
         headers: {
           Authorization: `Bearer ${OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
+          "Content-Type": "application/json"
         },
-        responseType: "arraybuffer",
+        responseType: "arraybuffer"
       }
     );
 
-    return Buffer.from(response.data).toString("base64");
+    console.log("[Alya] TTS üretildi.");
+    return Buffer.from(response.data, "binary").toString("base64");
 
-  } catch (error) {
-    console.error("TTS Hatası:", error.response?.data || error);
+  } catch (err) {
+    console.error("[Alya] TTS HATASI:", err);
     return null;
   }
 }
 
-// -----------------------------------------------------
-// TEST ENDPOINT
-// -----------------------------------------------------
-app.get("/", (req, res) => {
-  res.send("Alya OpenAI Voice Sistemi Aktif ✔");
-});
-
-// -----------------------------------------------------
-// TWILIO /call WEBHOOK
-// -----------------------------------------------------
+// ---------------------------------------------------------
+// 2) Ana konuşma Webhook (/call) – inbound + outbound aynı
+// ---------------------------------------------------------
 app.post("/call", async (req, res) => {
+  try {
+    const speech = req.body.SpeechResult || "Merhaba";
 
-  // Twilio timeout olmaması için:
-  res.setTimeout(4500);
+    console.log("[Alya] Kullanıcı konuşması:", speech);
 
-  const userSentence = req.body.SpeechResult || "Merhaba";
-
-  console.log("\n[Alya] Kullanıcı konuşması:", userSentence);
-
-  // GPT'den yanıt al
-  const aiResponse = await axios.post(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: `
-Sen Alya adında profesyonel bir arama asistanısın.
-Türkçe konuşursun.
-Cevapların kısa olacak: 6 - 10 kelime.
-Direkt konuya gir. Randevu almaya odaklan.
-Twilio'nun 64KB sınırına dikkat et.
+    // GPT Cevabı
+    const aiRes = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `
+Sen Alya isimli profesyonel bir çağrı karşılama ve randevu asistanısın.
+Türkçe konuşursun. Cevapların 6-10 kelimeyi geçmez.
+Doğrudan konuya gir. 
+Amaç: müşteriden randevu almak ve sohbeti kısa tutmak.
 `
-        },
-        {
-          role: "user",
-          content: userSentence
+          },
+          {
+            role: "user",
+            content: speech
+          }
+        ]
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
         }
-      ]
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
       }
+    );
+
+    const aiText = aiRes.data.choices[0].message.content;
+    console.log("[Alya GPT Yanıtı]:", aiText);
+
+    const audioBase64 = await generateSpeech(aiText);
+    if (!audioBase64) {
+      return res.send(`
+        <Response>
+          <Say>Sunucu hatası oluştu.</Say>
+        </Response>
+      `);
     }
-  );
 
-  const aiText = aiResponse.data.choices[0].message.content;
-  console.log("[Alya GPT Yanıtı]:", aiText);
+    const twimlResponse = `
+      <Response>
+        <Play>data:audio/wav;base64,${audioBase64}</Play>
+        <Gather input="speech" action="/call" method="POST" speechTimeout="auto"></Gather>
+      </Response>
+    `;
 
-  // TTS oluştur
-  const speechBase64 = await generateSpeech(aiText);
+    res.type("text/xml");
+    return res.send(twimlResponse);
 
-  if (!speechBase64) {
+  } catch (err) {
+    console.error("[Alya] Webhook Hatası:", err);
     return res.send(`
       <Response>
-        <Say>Teknik bir hata oluştu.</Say>
+        <Say>Bir hata meydana geldi.</Say>
       </Response>
     `);
   }
-
-  console.log("[Alya] TTS Üretildi.");
-
-  // -----------------------------------------------------
-  // Twilio'ya GÖNDERİLEN XML (MP3 + gecikmeli Gather)
-  // -----------------------------------------------------
-  const twiml = `
-    <Response>
-      <Play>data:audio/mp3;base64,${speechBase64}</Play>
-      <Pause length="1"/>
-      <Gather 
-        input="speech" 
-        action="/call" 
-        method="POST" 
-        speechTimeout="auto">
-      </Gather>
-    </Response>
-  `;
-
-  res.type("text/xml");
-  return res.send(twiml);
 });
 
-// -----------------------------------------------------
+// ---------------------------------------------------------
+// 3) OUTBOUND CUSTOMERS — Müşteriyi Biz Arıyoruz
+// ---------------------------------------------------------
+app.post("/call-customer", async (req, res) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ error: "Telefon numarası eksik." });
+    }
+
+    console.log("📞 OUTBOUND ARAMA BAŞLIYOR ->", phone);
+
+    const call = await client.calls.create({
+      to: phone,
+      from: "+905302511091",   // ☑ SENDEN GÖRÜNEN CALLER ID (Verified)
+      url: "https://alya-call-system.onrender.com/call"
+    });
+
+    return res.json({ ok: true, callSid: call.sid });
+
+  } catch (err) {
+    console.error("OUTBOUND CALL ERROR:", err);
+    return res.status(500).json({ error: "Arama başlatılamadı." });
+  }
+});
+
+// ---------------------------------------------------------
+// 4) TEST ENDPOINT
+// ---------------------------------------------------------
+app.get("/", (req, res) => {
+  res.send("Alya çağrı sistemi aktif ✔");
+});
+
+// ---------------------------------------------------------
+// 5) SERVER PORT
+// ---------------------------------------------------------
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-  console.log("Alya OpenAI Voice Sistemi Aktif →", PORT);
+  console.log("🚀 Alya OpenAI Voice Sistemi Aktif →", PORT);
 });
