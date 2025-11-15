@@ -56,7 +56,7 @@ app.post("/call", async (req, res) => {
         {
           role: "system",
           content: `
-            content: `
+            
 Sen Alya adında profesyonel bir arama asistanısın.
 Türkçe konuşursun.
 HER cevabın çok kısa olacak: maksimum 8-12 kelime.
