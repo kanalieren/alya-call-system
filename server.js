@@ -21,9 +21,10 @@ async function generateSpeech(text) {
       },
       {
         headers: {
-          Authorization: Bearer ${OPENAI_API_KEY},
-          "Content-Type": "application/json",
-        },
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+
+    "Content-Type": "application/json",
+},
         responseType: "arraybuffer",
       }
     );
