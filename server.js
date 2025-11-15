@@ -8,14 +8,16 @@ app.use(bodyParser.json());
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// LOG
-console.log("🚀 Alya server başlatılıyor... API KEY Var mı?", !!OPENAI_API_KEY);
+// ========== LOG SYSTEM ==========
+function log(...msg) {
+  console.log("[Alya]", ...msg);
+}
 
-// -------- TTS (Ses oluşturma) --------
+// ========== TTS OLUŞTUR ==========
 async function generateSpeech(text) {
-  console.log("🟦 TTS isteği gönderiliyor:", text);
-
   try {
+    log("TTS isteği gönderiliyor:", text);
+
     const response = await axios.post(
       "https://api.openai.com/v1/audio/speech",
       {
@@ -29,37 +31,23 @@ async function generateSpeech(text) {
           "Content-Type": "application/json",
         },
         responseType: "arraybuffer",
+        timeout: 20000,
       }
     );
 
-    const audioBase64 = Buffer.from(response.data).toString("base64");
-
-    console.log("🟩 TTS başarıyla üretildi. Uzunluk:", audioBase64.length);
-
-    return audioBase64;
+    log("TTS başarılı.");
+    return Buffer.from(response.data).toString("base64");
   } catch (err) {
-    console.error("❌ TTS HATASI:", err.response?.data || err.message || err);
+    log("❌ TTS HATASI:", err.response?.data || err.message);
     return null;
   }
 }
 
-// -------- TEST --------
-app.get("/", (req, res) => {
-  res.send("Alya OpenAI Voice Sistemi Aktif ✔");
-});
-
-// -------- TWILIO CALL WEBHOOK --------
-app.post("/call", async (req, res) => {
-  console.log("📞 Twilio çağrısı geldi:", req.body);
-
-  const userSentence = req.body.SpeechResult || "Merhaba, nasıl yardımcı olabilirim?";
-
-  console.log("🟦 Kullanıcı cümlesi:", userSentence);
-
-  // --- OpenAI Chat ---
-  let aiText = "Maalesef konuşma üretilemedi.";
-
+// ========== CHATGPT CEVABI AL ==========
+async function getAIResponse(userSentence) {
   try {
+    log("ChatGPT isteği:", userSentence);
+
     const aiResponse = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -69,11 +57,9 @@ app.post("/call", async (req, res) => {
             role: "system",
             content: `
 Sen Alya adında profesyonel bir arama asistanısın.
-Türkçe konuşursun.
-HER cevabın kısa olacak: 8-12 kelime.
-Uzun açıklamalar yapma.
-Doğrudan konuya gir.
-Randevu almaya odaklan.
+Kısa konuşursun (maks 8-12 kelime).
+Uzun cümle kurma. Direkt yanıt ver.
+Müşteriden randevu almaya odaklan.
             `,
           },
           {
@@ -87,48 +73,64 @@ Randevu almaya odaklan.
           Authorization: `Bearer ${OPENAI_API_KEY}`,
           "Content-Type": "application/json",
         },
+        timeout: 20000,
       }
     );
 
-    aiText = aiResponse.data.choices[0].message.content;
+    const text = aiResponse.data.choices[0].message.content;
+    log("ChatGPT yanıtı:", text);
 
-    console.log("🟩 OpenAI Chat yanıtı:", aiText);
+    return text;
   } catch (err) {
-    console.error("❌ Chat API HATASI:", err.response?.data || err);
+    log("❌ ChatGPT HATASI:", err.response?.data || err.message);
+    return "Şu anda sistemde hata oluştu.";
   }
+}
+
+// ========== TEST ==========
+app.get("/", (req, res) => {
+  res.send("Alya OpenAI Voice Sistemi Aktif ✔");
+});
+
+// ========== TWILIO WEBHOOK ==========
+app.post("/call", async (req, res) => {
+  log("📞 Yeni çağrı geldi.");
+  log("Twilio Body:", req.body);
+
+  const userSentence = req.body.SpeechResult || "Merhaba, kimsiniz?";
+  log("Kullanıcı konuşması:", userSentence);
+
+  // --- ChatGPT cevabı al ---
+  const aiText = await getAIResponse(userSentence);
 
   // --- TTS oluştur ---
   const speechBase64 = await generateSpeech(aiText);
 
   if (!speechBase64) {
-    console.log("❌ Ses üretilemedi → Twilio'ya hata dönüyoruz.");
-
-    const errorXML = `
+    log("❌ Ses oluşturulamadı, Twilio'ya fallback XML dönülüyor.");
+    res.type("text/xml");
+    return res.send(`
       <Response>
         <Say>Sunucu hatası oluştu.</Say>
       </Response>
-    `;
-
-    res.type("text/xml");
-    return res.send(errorXML);
+    `);
   }
 
-  // --- TWIML gönder ---
-  console.log("🟩 Twilio'ya başarılı XML dönüyor.");
-
-  const twimlResponse = `
+  // --- Twilio XML ---
+  const twiml = `
     <Response>
       <Play>data:audio/mp3;base64,${speechBase64}</Play>
       <Gather input="speech" action="/call" method="POST"></Gather>
     </Response>
   `;
 
+  log("Twilio'ya yanıt gönderiliyor...");
   res.type("text/xml");
-  res.send(twimlResponse);
+  res.send(twiml);
 });
 
-// -------- PORT --------
+// ========== SERVER ==========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("🔥 Alya OpenAI Voice Sistemi Aktif →", PORT);
+  log("Alya OpenAI Voice Sistemi Aktif →", PORT);
 });
