@@ -3,23 +3,27 @@ import bodyParser from "body-parser";
 import axios from "axios";
 import twilio from "twilio";
 
+// --------------------------------------------------
+// APP SETUP
+// --------------------------------------------------
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
+// --------------------------------------------------
+// ENV VARIABLES
+// --------------------------------------------------
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const TWILIO_SID = process.env.TWILIO_SID;
 const TWILIO_AUTH = process.env.TWILIO_AUTH;
 
 const client = twilio(TWILIO_SID, TWILIO_AUTH);
 
-// ---------------------------------------------
-// OPENAI TTS (Kadın sesi)
-// ---------------------------------------------
+// --------------------------------------------------
+// OpenAI TEXT → SPEECH
+// --------------------------------------------------
 async function generateSpeech(text) {
   try {
-    console.log("[Alya] Ses oluşturuluyor...");
-
     const response = await axios.post(
       "https://api.openai.com/v1/audio/speech",
       {
@@ -40,20 +44,22 @@ async function generateSpeech(text) {
     return Buffer.from(response.data).toString("base64");
 
   } catch (err) {
-    console.error("[Alya] Ses hatası:", err);
+    console.error("TTS ERROR:", err.response?.data || err);
     return null;
   }
 }
 
-// ---------------------------------------------
-// TWILIO /call WEBHOOK
-// ---------------------------------------------
+// --------------------------------------------------
+// TWILIO → /call WEBHOOK
+// --------------------------------------------------
 app.post("/call", async (req, res) => {
   try {
-    const customerSpeech = req.body.SpeechResult || "";
+    const speech = req.body.SpeechResult || "";
+    console.log("User said:", speech);
 
-    console.log("[Müşteri]:", customerSpeech);
-
+    // -------------------------------------------
+    // OPENAI → Alya cevabı
+    // -------------------------------------------
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -62,26 +68,12 @@ app.post("/call", async (req, res) => {
           {
             role: "system",
             content: `
-Sen Alya adında sıcak, kadınsı, profesyonel bir satış asistanısın.
-Pronet için iş yerlerini arıyorsun.
-Görevlerin:
-- Randevu almak
-- Randevu sonrası 4 soruyu sormak:
-1) Adınız neydi?
-2) Alarm/Kamera sisteminiz var mı?
-3) Karar verici siz misiniz, ortak var mı?
-4) Randevuda uzmanımız sizinle mi görüşecek?
-
-Cevapların KISA olsun (10–12 kelime).
-Üslubun samimi ve ikna edici olsun.
-Fiyat verme.
-Konu dışına çıkma.
-            `
+Sen Alya adında sıcak, samimi bir satış asistanısın.
+Görevin iş yerlerine randevu oluşturmak.
+Kısa cümlelerle konuş.
+`
           },
-          {
-            role: "user",
-            content: customerSpeech
-          }
+          { role: "user", content: speech }
         ]
       },
       {
@@ -93,18 +85,28 @@ Konu dışına çıkma.
     );
 
     const alyaReply = aiRes.data.choices[0].message.content;
-    console.log("[Alya]:", alyaReply);
+    console.log("Alya:", alyaReply);
 
-    const audioBase64 = await generateSpeech(alyaReply);
+    // -------------------------------------------
+    // OpenAI TTS
+    // -------------------------------------------
+    const audio = await generateSpeech(alyaReply);
 
-    if (!audioBase64) {
-      return res.send(`<Response><Say>Hata oluştu.</Say></Response>`);
+    if (!audio) {
+      return res.type("text/xml").send(`
+        <Response>
+          <Say>Üzgünüm, bir hata oluştu.</Say>
+        </Response>
+      `);
     }
 
+    // -------------------------------------------
+    // TWIML DÖN
+    // -------------------------------------------
     const twiml = `
       <Response>
-        <Play>data:audio/wav;base64,${audioBase64}</Play>
-        <Gather input="speech" action="/call" method="POST" speechTimeout="auto"/>
+        <Play>data:audio/wav;base64,${audio}</Play>
+        <Gather input="speech" action="/call" method="POST" speechTimeout="auto" />
       </Response>
     `;
 
@@ -112,24 +114,17 @@ Konu dışına çıkma.
     res.send(twiml);
 
   } catch (err) {
-    console.error("CALL HATASI:", err);
-    res.type("text/xml");
-    res.send(`<Response><Say>Sunucu hatası oluştu.</Say></Response>`);
+    console.error("CALL ERROR:", err);
+    res.type("text/xml").send(`<Response><Say>Sunucu hatası.</Say></Response>`);
   }
 });
 
-// ---------------------------------------------
-// OUTBOUND ARAMA
-// ---------------------------------------------
+// --------------------------------------------------
+// CUSTOMER OUTBOUND CALL
+// --------------------------------------------------
 app.post("/call-customer", async (req, res) => {
   try {
     const { phone } = req.body;
-
-    if (!phone) {
-      return res.status(400).json({ error: "Telefon numarası gerekli." });
-    }
-
-    console.log("OUTBOUND ARAMA →", phone);
 
     const call = await client.calls.create({
       to: phone,
@@ -140,17 +135,22 @@ app.post("/call-customer", async (req, res) => {
     res.json({ ok: true, callSid: call.sid });
 
   } catch (err) {
-    console.error("OUTBOUND CALL ERROR:", err);
+    console.error("OUTBOUND ERROR:", err);
     res.status(500).json({ error: "Arama başlatılamadı" });
   }
 });
 
-// ---------------------------------------------
-app.get("/", (req, res) => res.send("Alya sistemi aktif ✔"));
-// ---------------------------------------------
+// --------------------------------------------------
+// ROOT TEST
+// --------------------------------------------------
+app.get("/", (req, res) => {
+  res.send("Alya sistemi aktif ✔");
+});
 
-// ⭐ EN KRİTİK – BUNU EKLEDİM ⭐
+// --------------------------------------------------
+// PORT
+// --------------------------------------------------
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () =>
-  console.log(`Alya OpenAI – Twilio sistemi çalışıyor → PORT ${PORT}`)
-);
+app.listen(PORT, () => {
+  console.log("Alya çalışıyor → PORT", PORT);
+});
