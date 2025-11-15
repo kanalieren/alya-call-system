@@ -1,7 +1,3 @@
-// ---------------------------------------------
-// Alya – OpenAI + Twilio Akıllı Arama Sistemi
-// ---------------------------------------------
-
 import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
@@ -11,9 +7,6 @@ const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-// ---------------------------------------------
-// ENV değişkenleri
-// ---------------------------------------------
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const TWILIO_SID = process.env.TWILIO_SID;
 const TWILIO_AUTH = process.env.TWILIO_AUTH;
@@ -21,7 +14,7 @@ const TWILIO_AUTH = process.env.TWILIO_AUTH;
 const client = twilio(TWILIO_SID, TWILIO_AUTH);
 
 // ---------------------------------------------
-// OPENAI TTS – Kadın sesi
+// OPENAI TTS (Kadın sesi)
 // ---------------------------------------------
 async function generateSpeech(text) {
   try {
@@ -53,16 +46,14 @@ async function generateSpeech(text) {
 }
 
 // ---------------------------------------------
-// TWILIO – /call (Webhook)
+// TWILIO /call WEBHOOK
 // ---------------------------------------------
 app.post("/call", async (req, res) => {
   try {
     const customerSpeech = req.body.SpeechResult || "";
+
     console.log("[Müşteri]:", customerSpeech);
 
-    // ---------------------------------------------
-    // OpenAI Yanıtı
-    // ---------------------------------------------
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -73,7 +64,6 @@ app.post("/call", async (req, res) => {
             content: `
 Sen Alya adında sıcak, kadınsı, profesyonel bir satış asistanısın.
 Pronet için iş yerlerini arıyorsun.
-
 Görevlerin:
 - Randevu almak
 - Randevu sonrası 4 soruyu sormak:
@@ -103,20 +93,15 @@ Konu dışına çıkma.
     );
 
     const alyaReply = aiRes.data.choices[0].message.content;
+
     console.log("[Alya]:", alyaReply);
 
-    // ---------------------------------------------
-    // OpenAI → TTS
-    // ---------------------------------------------
     const audioBase64 = await generateSpeech(alyaReply);
 
     if (!audioBase64) {
       return res.send(`<Response><Say>Hata oluştu.</Say></Response>`);
     }
 
-    // ---------------------------------------------
-    // Twilio’ya konuşma + yeni konuşma beklemesi
-    // ---------------------------------------------
     const twiml = `
       <Response>
         <Play>data:audio/wav;base64,${audioBase64}</Play>
@@ -135,7 +120,7 @@ Konu dışına çıkma.
 });
 
 // ---------------------------------------------
-// OUTBOUND CALL – Alya'nın müşteriyi araması
+// OUTBOUND ARAMA
 // ---------------------------------------------
 app.post("/call-customer", async (req, res) => {
   try {
@@ -149,7 +134,7 @@ app.post("/call-customer", async (req, res) => {
 
     const call = await client.calls.create({
       to: phone,
-      from: "+905302511091", // Verified Caller ID
+      from: "+905302511091",   // Twilio Verified Caller ID
       url: "https://alya-call-system.onrender.com/call"
     });
 
@@ -162,12 +147,12 @@ app.post("/call-customer", async (req, res) => {
 });
 
 // ---------------------------------------------
-// Test sayfası
+// ROOT
 // ---------------------------------------------
 app.get("/", (req, res) => res.send("Alya sistemi aktif ✔"));
 
 // ---------------------------------------------
-// SUNUCU (Render uyumlu port)
+// PORT – Render Uyumlu
 // ---------------------------------------------
 const PORT = process.env.PORT || 10000;
 
