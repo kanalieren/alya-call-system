@@ -10,6 +10,7 @@ app.use(bodyParser.json());
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const TWILIO_SID = process.env.TWILIO_SID;
 const TWILIO_AUTH = process.env.TWILIO_AUTH;
+const TWILIO_WHATSAPP = process.env.TWILIO_WHATSAPP; // Twilio WhatsApp numarası
 
 const client = twilio(TWILIO_SID, TWILIO_AUTH);
 
@@ -46,7 +47,29 @@ async function generateSpeech(text) {
 }
 
 // ---------------------------------------------------------
-// 2) Alya Konuşma Webhook (/call)
+// 2) WhatsApp mesajı gönderme fonksiyonu
+// ---------------------------------------------------------
+async function sendWhatsAppMessage(to) {
+  try {
+    console.log("📩 WhatsApp mesajı gönderiliyor:", to);
+
+    await client.messages.create({
+      from: `whatsapp:${TWILIO_WHATSAPP}`,
+      to: `whatsapp:${to}`,
+      body:
+        "Merhaba, ben Alya 💬\n" +
+        "Randevunuzu oluşturdum. Güvenlik uzmanımız belirttiğiniz saatte sizi ziyaret edecek.\n" +
+        "Destek için buradayım. Güvenli günler dilerim."
+    });
+
+    console.log("📩 WhatsApp mesajı gönderildi!");
+  } catch (err) {
+    console.error("WhatsApp Mesaj HATASI:", err);
+  }
+}
+
+// ---------------------------------------------------------
+// 3) Alya Konuşma Webhook (/call)
 // ---------------------------------------------------------
 app.post("/call", async (req, res) => {
   try {
@@ -69,16 +92,20 @@ Her cümlen kısa, net ve akıcıdır. (8–12 kelime)
 
 Görevlerin:
 - Müşteriyi nazikçe karşılamak.
-- “Merhaba, ben Alya. Pronet güvenlik hizmetlerinden arıyorum. Alieren Bey’in dijital asistanıyım.” cümlesi ile açılış yapmak.
-- Gereksiz konuşmadan kaçınmak.
+- “Merhaba, ben Alya. Pronet güvenlik hizmetlerinden arıyorum. Alieren Bey’in dijital asistanıyım.” diyerek açılmak.
 - Amaç: ücretsiz keşif randevusu oluşturmak.
-- Randevu onayı aldıktan sonra müşteriyi nitelendirmek.
+- Randevu aldıktan sonra 4 nitelendirme sorusunu sormak.
 
-RANDEVU SONRASI SORMAN GEREKEN 4 NİTELENDİRME SORUSU:
+Nitelendirme soruları:
 1) “Sizi nasıl hitap edeyim, adınızı alabilir miyim?”
 2) “Şu anda kullandığınız bir alarm veya kamera sistemi var mı?”
 3) “Kararı siz mi veriyorsunuz, yoksa ortak var mı?”
 4) “Randevuda uzmanımız sizinle mi görüşecek?”
+
+Müşteri randevuyu onayladığında şunu söylemeyi unutma:
+"Tamamdır, randevunuzu oluşturdum."
+
+Eğer Alya bu cümleyi söylerse sunucu WhatsApp mesajı gönderecektir.
 
 İtiraz kırıcı kısa cümleler:
 - “Tabii ki, sadece kısa bir bilgilendirme yapıyoruz.”
@@ -86,7 +113,7 @@ RANDEVU SONRASI SORMAN GEREKEN 4 NİTELENDİRME SORUSU:
 - “Anlıyorum, süreç çok kısa, size uygun zamanı ayarlayabiliriz.”
 - “Birçok kişi önce ihtiyaç olmadığını düşünüyor ama uzmanımız netleştiriyor.”
 
-Sakın fiyat verme, kampanya uydurma, teknik detaya girme.
+Fiyat verme, yanlış bilgi verme, teknik detaya girme.
 Cümlelerin daima sıcak, kısa ve net olsun.
             `
           },
@@ -103,6 +130,12 @@ Cümlelerin daima sıcak, kısa ve net olsun.
 
     const aiText = aiRes.data.choices[0].message.content;
     console.log("[Alya]:", aiText);
+
+    // Eğer Alya randevuyu oluşturduysa WhatsApp mesajını gönder
+    if (aiText.includes("randevunuzu oluşturdum")) {
+      const customerPhone = req.body.From.replace("client:", "").replace("whatsapp:", "");
+      sendWhatsAppMessage(customerPhone);
+    }
 
     // TTS üret
     const audioBase64 = await generateSpeech(aiText);
@@ -127,7 +160,7 @@ Cümlelerin daima sıcak, kısa ve net olsun.
 });
 
 // ---------------------------------------------------------
-// 3) OUTBOUND: Alya müşteriyi arıyor
+// 4) OUTBOUND: Alya müşteriyi arıyor
 // ---------------------------------------------------------
 app.post("/call-customer", async (req, res) => {
   try {
@@ -139,7 +172,7 @@ app.post("/call-customer", async (req, res) => {
 
     const call = await client.calls.create({
       to: phone,
-      from: "+905302511091",   // SENİN VERIFIED NUMARAN
+      from: "+905302511091",
       url: "https://alya-call-system.onrender.com/call"
     });
 
@@ -152,14 +185,14 @@ app.post("/call-customer", async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// 4) Test endpoint
+// 5) Test endpoint
 // ---------------------------------------------------------
 app.get("/", (req, res) => {
   res.send("Alya çağrı sistemi aktif ✔");
 });
 
 // ---------------------------------------------------------
-// 5) PORT
+// 6) PORT
 // ---------------------------------------------------------
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
