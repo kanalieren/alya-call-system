@@ -7,164 +7,149 @@ const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-// ---------------------------------------------
-// ⭐ ENV DEĞERLERİ
-// ---------------------------------------------
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const TWILIO_SID = process.env.TWILIO_SID;
 const TWILIO_AUTH = process.env.TWILIO_AUTH;
-const TWILIO_WHATSAPP = "whatsapp:+14155238886";
 
 const client = twilio(TWILIO_SID, TWILIO_AUTH);
 
 // ---------------------------------------------
-// ⭐ WhatsApp MESAJ FONKSİYONLARI
+// OPENAI TTS (Kadın sesi)
 // ---------------------------------------------
-async function sendPositiveMessage(to) {
+async function generateSpeech(text) {
   try {
-    await client.messages.create({
-      from: TWILIO_WHATSAPP,
-      to: `whatsapp:${to}`,
-      body:
-        "Merhaba, az önceki görüşmemiz için teşekkür ederim 😊\n" +
-        "Randevunuz oluşturuldu, belirttiğiniz saatte işletmenizde olacağım.\n" +
-        "Güzel günler dilerim. 🌿",
-    });
-  } catch (err) {
-    console.error("Olumlu WhatsApp mesajı hatası:", err);
-  }
-}
+    console.log("[Alya] Ses oluşturuluyor...");
 
-async function sendNegativeMessage(to) {
-  try {
-    await client.messages.create({
-      from: TWILIO_WHATSAPP,
-      to: `whatsapp:${to}`,
-      body:
-        "Merhaba, zaman ayırdığınız için teşekkür ederim 🙏\n" +
-        "Her zaman yardımcı olmaktan memnuniyet duyarım.\n" +
-        "İyi günler dilerim. 🌿",
-    });
-  } catch (err) {
-    console.error("Olumsuz WhatsApp mesajı hatası:", err);
-  }
-}
-
-// ---------------------------------------------
-// ⭐ OpenAI Alya — Konuşma Motoru
-// ---------------------------------------------
-async function askAlya(userText, conversationState) {
-  const payload = {
-    model: "gpt-4.1",
-    messages: [
+    const response = await axios.post(
+      "https://api.openai.com/v1/audio/speech",
       {
-        role: "system",
-        content: `
-Sen Alya isimli profesyonel bir satış asistanısın.
-Sadece şu teklif için konuşuyorsun: "ProNet alarm ve kamera sistemleri".
-
-Tonun:
-• kadınsı
-• sıcak
-• hızlı randevu alan
-• samimi ve ikna edici
-
-Amaçların:
-1) Randevu almak
-2) Randevudan önce 3 bilgi toplamak:
-   - Müşterinin adı
-   - Alarm/kamera sistemi var mı?
-   - Karar verici kendisi mi?
-
-Konuşma sonunda JSON döndür:
-{
-  "reply": "müşteriye söyleyeceğin cümle",
-  "status": "continue | positive | negative",
-  "customer_name": "",
-  "has_alarm": "",
-  "decision_maker": ""
-}
-        `,
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        input: text,
+        format: "wav"
       },
-      { role: "user", content: userText },
-      ...(conversationState.history || []),
-    ],
-  };
+      {
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        responseType: "arraybuffer"
+      }
+    );
 
-  const response = await axios.post(
-    "https://api.openai.com/v1/chat/completions",
-    payload,
-    { headers: { Authorization: `Bearer ${OPENAI_API_KEY}` } }
-  );
+    return Buffer.from(response.data).toString("base64");
 
-  const ai = response.data.choices[0].message.content;
-  return JSON.parse(ai.trim());
+  } catch (err) {
+    console.error("[Alya] Ses hatası:", err);
+    return null;
+  }
 }
 
 // ---------------------------------------------
-// ⭐ ANA TWILIO /call ENDPOINT
+// TWILIO /call WEBHOOK
 // ---------------------------------------------
 app.post("/call", async (req, res) => {
-  const userSpeech = req.body.SpeechResult || "";
-  const userPhone = req.body.From?.replace("whatsapp:", "").replace("+", "");
+  try {
+    const customerSpeech = req.body.SpeechResult || "";
 
-  if (!userPhone) console.log("Telefon algılanamadı.");
+    console.log("[Müşteri]:", customerSpeech);
 
-  // Kullanıcı konuşması olmadığı anda Alya'nın ilk açılışı:
-  let aiResponse;
-  if (!userSpeech) {
-    aiResponse = {
-      reply:
-        "Merhaba, ben Alya. ProNet Güvenlik Hizmetlerinden dijital asistanınızım. Size daha uygun güvenlik seçenekleri hakkında hızlıca bilgi verip randevu oluşturabilirim. İsminizi öğrenebilir miyim?",
-      status: "continue",
-    };
-  } else {
-    aiResponse = await askAlya(userSpeech);
-  }
+    const aiRes = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `
+Sen Alya adında sıcak, kadınsı, profesyonel bir satış asistanısın.
+Pronet için iş yerlerini arıyorsun.
+Görevlerin:
+- Randevu almak
+- Randevu sonrası 4 soruyu sormak:
+1) Adınız neydi?
+2) Alarm/Kamera sisteminiz var mı?
+3) Karar verici siz misiniz, ortak var mı?
+4) Randevuda uzmanımız sizinle mi görüşecek?
 
-  // Randevu kararı
-  if (aiResponse.status === "positive") {
-    sendPositiveMessage(userPhone);
-  } else if (aiResponse.status === "negative") {
-    sendNegativeMessage(userPhone);
-  }
-
-  // TTS üret
-  const tts = await axios.post(
-    "https://api.openai.com/v1/audio/speech",
-    {
-      model: "gpt-4o-mini-tts",
-      voice: "alloy",
-      input: aiResponse.reply,
-      format: "wav",
-    },
-    {
-      responseType: "arraybuffer",
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
+Cevapların KISA olsun (10–12 kelime).
+Üslubun samimi ve ikna edici olsun.
+Fiyat verme.
+Konu dışına çıkma.
+            `
+          },
+          {
+            role: "user",
+            content: customerSpeech
+          }
+        ]
       },
+      {
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    const alyaReply = aiRes.data.choices[0].message.content;
+
+    console.log("[Alya]:", alyaReply);
+
+    const audioBase64 = await generateSpeech(alyaReply);
+
+    if (!audioBase64) {
+      return res.send(`<Response><Say>Hata oluştu.</Say></Response>`);
     }
-  );
 
-  const base64Audio = Buffer.from(tts.data).toString("base64");
+    const twiml = `
+      <Response>
+        <Play>data:audio/wav;base64,${audioBase64}</Play>
+        <Gather input="speech" action="/call" method="POST" speechTimeout="auto" />
+      </Response>
+    `;
 
-  // TWIML cevap
-  const twiml = `
-<Response>
-  <Play>data:audio/wav;base64,${base64Audio}</Play>
-  <Gather input="speech" action="/call" method="POST" speechTimeout="auto"></Gather>
-</Response>
-`;
+    res.type("text/xml");
+    res.send(twiml);
 
-  res.type("text/xml");
-  res.send(twiml);
+  } catch (err) {
+    console.error("CALL HATASI:", err);
+    res.type("text/xml");
+    res.send(`<Response><Say>Sunucu hatası oluştu.</Say></Response>`);
+  }
 });
 
 // ---------------------------------------------
-app.get("/", (req, res) => res.send("Alya sistem canlı ✔"));
+// OUTBOUND ARAMA
+// ---------------------------------------------
+app.post("/call-customer", async (req, res) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ error: "Telefon numarası gerekli." });
+    }
+
+    console.log("OUTBOUND ARAMA →", phone);
+
+    const call = await client.calls.create({
+      to: phone,
+      from: "+905302511091",   // SANA AİT VERIFIED NUMARA
+      url: "https://alya-call-system.onrender.com/call"
+    });
+
+    res.json({ ok: true, callSid: call.sid });
+
+  } catch (err) {
+    console.error("OUTBOUND CALL ERROR:", err);
+    res.status(500).json({ error: "Arama başlatılamadı" });
+  }
+});
+
+// ---------------------------------------------
+app.get("/", (req, res) => res.send("Alya sistemi aktif ✔"));
 // ---------------------------------------------
 
 app.listen(10000, () =>
-  console.log("Alya OpenAI-Twilio Voice Sistemi çalışıyor → 10000")
+  console.log("Alya OpenAI – Twilio sistemi çalışıyor → PORT 10000")
 );
