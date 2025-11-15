@@ -49,16 +49,13 @@ app.post("/call", async (req, res) => {
 
   // OpenAI'den konuşma cevabı al
   const aiResponse = await axios.post(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      model: "gpt-4o-mini",
-      messages: [
-        {
-
-          
-{
-  role: "system",
-  content: `
+  "https://api.openai.com/v1/chat/completions",
+  {
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: `
 Sen Alya adında profesyonel bir arama asistanısın.
 Türkçe konuşursun.
 HER cevabın çok kısa olacak: maksimum 8-12 kelime.
@@ -67,20 +64,21 @@ Twilio'nun 64KB sınırı için ses çıktısını KÜÇÜK tut.
 Doğrudan konuya gir.
 Müşteriden randevu almaya odaklan.
 `
-},
-
-        {
-          role: "user",
-          content: userSentence
-        }
-      ]
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      {
+        role: "user",
+        content: userSentence
       }
+    ]
+  },
+  {
+    headers: {
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json"
     }
-  );
+  }
+);
+
 
   const aiText = aiResponse.data.choices[0].message.content;
 
