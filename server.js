@@ -2,6 +2,15 @@ import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
 import twilio from "twilio";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// STATIC PANEL SERVE
+app.use(express.static(__dirname + "/public"));
+
 
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
