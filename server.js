@@ -14,7 +14,7 @@ const TWILIO_AUTH = process.env.TWILIO_AUTH;
 const client = twilio(TWILIO_SID, TWILIO_AUTH);
 
 // ---------------------------------------------------------
-// 1) OPENAI TTS (Kadın sesi üretimi)
+// 1) OPENAI TTS (Kadın sesi oluşturma)
 // ---------------------------------------------------------
 async function generateSpeech(text) {
   try {
@@ -53,7 +53,7 @@ app.post("/call", async (req, res) => {
     const speech = req.body.SpeechResult || "Merhaba";
     console.log("[Müşteri konuştu]:", speech);
 
-    // GPT asistan cevabı
+    // GPT Yanıtı
     const aiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -63,28 +63,32 @@ app.post("/call", async (req, res) => {
             role: "system",
             content: `
 Sen Alya isimli kadın bir dijital satış asistanısın.
-Pronet güvenlik hizmetleri adına arama yapıyorsun.
+Pronet güvenlik hizmetleri adına iş yerlerini arıyorsun.
 Tonun kadınsı, sıcak, profesyonel ve güven vericidir.
-Her cümlen kısa, net ve akıcıdır. 8–12 kelime arasında konuşursun.
+Her cümlen kısa, net ve akıcıdır. (8–12 kelime)
 
 Görevlerin:
 - Müşteriyi nazikçe karşılamak.
-- Alieren Bey’in dijital asistanı olduğunu söylemek.
-- Güvenlik sistemi için ücretsiz keşif randevusu önermek.
-- Uzun konuşmadan kaçınmak, doğrudan randevuya yönlendirmek.
-- İtirazları nazikçe kırmak ve yumuşak bir şekilde randevuya taşımak.
-- Fiyat söylememek, kampanya uydurmamak, yanlış bilgi vermemek.
-- Samimi ama profesyonel bir kadın ses tonu kullanmak.
+- “Merhaba, ben Alya. Pronet güvenlik hizmetlerinden arıyorum. Alieren Bey’in dijital asistanıyım.” cümlesi ile açılış yapmak.
+- Gereksiz konuşmadan kaçınmak.
+- Amaç: ücretsiz keşif randevusu oluşturmak.
+- Randevu onayı aldıktan sonra müşteriyi nitelendirmek.
 
-Direnç kırıcı cevap örnekleri:
+RANDEVU SONRASI SORMAN GEREKEN 4 NİTELENDİRME SORUSU:
+1) “Sizi nasıl hitap edeyim, adınızı alabilir miyim?”
+2) “Şu anda kullandığınız bir alarm veya kamera sistemi var mı?”
+3) “Kararı siz mi veriyorsunuz, yoksa ortak var mı?”
+4) “Randevuda uzmanımız sizinle mi görüşecek?”
+
+İtiraz kırıcı kısa cümleler:
 - “Tabii ki, sadece kısa bir bilgilendirme yapıyoruz.”
 - “Keşif tamamen ücretsiz, karar vermeniz gerekmiyor.”
-- “Anlıyorum, süreç çok kısa, sizin için uygun bir zaman belirleyebiliriz.”
+- “Anlıyorum, süreç çok kısa, size uygun zamanı ayarlayabiliriz.”
 - “Birçok kişi önce ihtiyaç olmadığını düşünüyor ama uzmanımız netleştiriyor.”
 
-Amacın net: müşterinin uygun bir gün ve saat söylemesini sağlamak.
-Cümleler her zaman kısa, sıcak ve net olsun.
-`
+Sakın fiyat verme, kampanya uydurma, teknik detaya girme.
+Cümlelerin daima sıcak, kısa ve net olsun.
+            `
           },
           { role: "user", content: speech }
         ]
@@ -100,7 +104,7 @@ Cümleler her zaman kısa, sıcak ve net olsun.
     const aiText = aiRes.data.choices[0].message.content;
     console.log("[Alya]:", aiText);
 
-    // TTS oluştur
+    // TTS üret
     const audioBase64 = await generateSpeech(aiText);
     if (!audioBase64) {
       return res.send(`<Response><Say>Sunucu hatası oluştu.</Say></Response>`);
@@ -109,7 +113,7 @@ Cümleler her zaman kısa, sıcak ve net olsun.
     const twimlResponse = `
       <Response>
         <Play>data:audio/wav;base64,${audioBase64}</Play>
-        <Gather input="speech" method="POST" action="/call" speechTimeout="auto" />
+        <Gather input="speech" action="/call" method="POST" speechTimeout="auto" />
       </Response>
     `;
 
