@@ -1,75 +1,86 @@
 import express from "express";
-import bodyParser from "body-parser";
-import axios from "axios";
-import twilio from "twilio";
 import dotenv from "dotenv";
+import { OpenAI } from "openai";
+import twilio from "twilio";
+import path from "path";
+import { fileURLToPath } from "url";
 
 dotenv.config();
 
 const app = express();
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
-app.use(express.static("public")); // <-- HTML panel için önemli
+app.use(express.json());
 
-// ---------------------------------------------
-// TWILIO AYARLARI
-// ---------------------------------------------
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+// 🔧 Twilio Client
+const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH);
 
-// SENİN TWILIO NUMARAN
-const TWILIO_NUMBER = "+14706655724";  // <-- EN KRİTİK SATIR (Twilio numaran)
+// 🔧 OpenAI Client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
-// ---------------------------------------------
-// PANELDEN GELEN ARAMAYI BAŞLATMA
-// ---------------------------------------------
+// Path ayarları
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// === PANEL HTML SERVE ===
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "panel.html"));
+});
+
+app.get("/panel.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "panel.html"));
+});
+
+// === MÜŞTERİYİ ARAMA ENDPOINT ===
 app.post("/call-customer", async (req, res) => {
-  const { number } = req.body;
-
-  if (!number || number.length < 10) {
-    return res.json({ ok: false, error: "Geçersiz müşteri numarası." });
-  }
-
   try {
-    console.log("➡️ Alya aramayı başlatıyor:", number);
+    const customerNumber = req.body.customerNumber?.trim();
+
+    // ⭐ VALIDASYON TAMAMEN KALDIRILDI
+    if (!customerNumber) {
+      return res.status(400).json({
+        ok: false,
+        error: "Numara alınamadı.",
+      });
+    }
+
+    console.log("📞 Arama başlıyor:", customerNumber);
 
     const call = await client.calls.create({
-      url: "https://alya-call-system.onrender.com/call",
-      to: number,
-      from: TWILIO_NUMBER, // <-- TWILIO NUMARAN BURADA KULLANILIYOR
+      to: customerNumber,
+      from: process.env.TWILIO_PHONE,
+      url: process.env.PUBLIC_URL + "/call",
     });
 
-    res.json({ ok: true, callSid: call.sid });
+    return res.json({ ok: true, callSid: call.sid });
   } catch (err) {
-    console.error("OUTBOUND CALL ERROR:", err);
-    res.status(500).json({ ok: false, error: "Arama başlatılamadı." });
+    console.error("🚨 Arama başlatılamadı:", err);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// ---------------------------------------------
-// TWILIO TARAFINDAN ÇAĞRILAN ENDPOINT
-// ---------------------------------------------
-app.post("/call", (req, res) => {
-  const twiml = `
-    <Response>
-      <Say voice="Polly-Deepa" language="tr-TR">
-        Merhaba! Test araması başarılı. Alya arama sistemi çalışıyor.
-      </Say>
-    </Response>
-  `;
+// === TWILIO'DAN GELEN CALL WEBHOOK ===
+app.post("/call", async (req, res) => {
+  try {
+    console.log("🤖 Twilio call webhook tetiklendi");
 
-  res.set("Content-Type", "text/xml");
-  res.send(twiml);
+    // Basit bir karşılama mesajı
+    const twiml = `
+      <Response>
+        <Say language="tr-TR" voice="Polly-Filiz">
+          Merhaba, Pronet'ten arıyoruz. Size yardımcı olabilir miyim?
+        </Say>
+      </Response>
+    `;
+
+    res.type("text/xml");
+    return res.send(twiml);
+  } catch (err) {
+    console.error("🚨 Twilio Call Webhook Hatası:", err);
+    res.status(500).send("<Response><Say>Hata oluştu.</Say></Response>");
+  }
 });
 
-// ---------------------------------------------
-app.get("/", (req, res) => res.send("Alya sistemi aktif ✔"));
-// ---------------------------------------------
-
-const PORT = process.env.PORT || 11200;
-app.listen(PORT, () =>
-  console.log(`Alya OpenAI – Twilio sistemi çalışıyor → PORT ${PORT}`)
-);
-
+// === SERVER ===
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`🚀 Sunucu çalışıyor → PORT ${PORT}`));
