@@ -18,21 +18,15 @@ const __dirname = path.dirname(__filename);
 // ---- Twilio Client ----
 const client = Twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH);
 
-// ---- OpenAI Client ----
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 // ---- WebSocket Server ----
 const wss = new WebSocketServer({ noServer: true });
 
-let openAiWs = null;
-
-// ---- WebSocket Upgrade ----
+// ---- Start Server ----
 app.server = app.listen(PORT, () => {
-  console.log("🚀 Alya OpenAI Voice Sistemi aktif → PORT", PORT);
+  console.log("🚀 Alya Voice Server Active → PORT", PORT);
 });
 
+// ---- WebSocket Upgrade ----
 app.server.on("upgrade", (request, socket, head) => {
   if (request.url === "/ws") {
     wss.handleUpgrade(request, socket, head, (ws) => {
@@ -43,99 +37,106 @@ app.server.on("upgrade", (request, socket, head) => {
   }
 });
 
-// ---- WebSocket: Twilio <-> OpenAI bağlantısı ----
+// ---- Core Voice Logic ----
 wss.on("connection", async (ws) => {
-  console.log("🔌 Twilio bağlandı.");
+  console.log("🔌 Twilio connected.");
 
-  // OpenAI WebSocket’e bağlan
-  openAiWs = new WebSocket("wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview", {
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "OpenAI-Beta": "realtime=v1",
-    },
-  });
+  // OpenAI Realtime WebSocket
+  const openAiWs = new WebSocket(
+    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "OpenAI-Beta": "realtime=v1",
+      },
+    }
+  );
 
-  // OpenAI bağlanınca başlangıç mesajı gönder
   openAiWs.on("open", () => {
-    console.log("🧠 OpenAI Realtime bağlı.");
+    console.log("🧠 Connected to OpenAI Realtime.");
 
     openAiWs.send(
       JSON.stringify({
         type: "response.create",
         response: {
           instructions: `
-Senin adın **Alya**.  
-Sıcak kanlı, samimi, profesyonel ve espirili bir asistansın.  
-Müşteriyle doğal konuş, argo kullanma.  
-Randevu oluşturmaya odaklan. 
-        `,
-        modalities: ["audio"],
-        audio_format: "pcm16",
+Senin adın Alya.
+Sıcakkanlı, profesyonel, esprili ama argo kullanmayan bir asistansın.
+Müşteriyle samimi konuş, randevu oluşturmaya odaklan.
+          `,
+          modalities: ["audio"],
+        },
       })
     );
   });
 
-  // OpenAI’den gelen sesi → Twilio’ya gönder
+  // ---- OpenAI → Twilio (AUDIO OUT) ----
   openAiWs.on("message", (data) => {
     try {
-      const msg = JSON.parse(data);
+      const event = JSON.parse(data);
 
-      if (msg.type === "response.audio.delta") {
+      // Doğru event: response.output_audio.delta
+      if (event.type === "response.output_audio.delta") {
         ws.send(
           JSON.stringify({
             event: "media",
-            media: { payload: msg.delta },
+            media: {
+              payload: event.audio_base64, // Twilio base64 bekler
+            },
           })
         );
       }
-    } catch {}
+    } catch (err) {
+      console.log("OpenAI Parse Error:", err);
+    }
   });
 
-  // Twilio’dan gelen ses → OpenAI’ye gönder
-  ws.on("message", (data) => {
-    const msg = JSON.parse(data);
+  // ---- Twilio → OpenAI (AUDIO IN) ----
+  ws.on("message", (msg) => {
+    const data = JSON.parse(msg);
 
-    if (msg.event === "media") {
-      openAiWs?.send(
+    // Caller audio
+    if (data.event === "media" && data.media?.payload) {
+      openAiWs.send(
         JSON.stringify({
           type: "input_audio_buffer.append",
-          audio: msg.media.payload,
+          audio: data.media.payload, // Twilio base64 gönderiyor
         })
       );
     }
 
-    if (msg.event === "start") {
-      openAiWs?.send(JSON.stringify({ type: "response.create" }));
+    if (data.event === "start") {
+      openAiWs.send(JSON.stringify({ type: "response.create" }));
     }
 
-    if (msg.event === "stop") {
-      openAiWs?.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    if (data.event === "stop") {
+      openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
     }
   });
 
   ws.on("close", () => {
-    console.log("❌ Twilio bağlantısı kapandı.");
-    openAiWs?.close();
+    console.log("❌ Twilio Disconnected.");
+    openAiWs.close();
   });
 });
 
-// ---- PUBLIC ----
+// ---- Static Panel ----
 app.use(express.static(path.join(__dirname, "public")));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 
-// ---- Panel ----
+// ---- Web Panel ----
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "panel.html"));
 });
 
-// ---- Caller starts call ----
+// ---- Outgoing Call Trigger ----
 app.post("/call-customer", async (req, res) => {
   try {
     const { number } = req.body;
 
     const call = await client.calls.create({
-      url: process.env.TWILIO_VOICE_URL, // /answer
+      url: process.env.TWILIO_VOICE_URL,
       to: number,
       from: process.env.TWILIO_NUMBER,
     });
@@ -146,8 +147,7 @@ app.post("/call-customer", async (req, res) => {
   }
 });
 
-// ---- Twilio Answer (TwiML) ----
-// Bu endpoint sadece 1 KB’den küçük XML döner → güvenli
+// ---- Twilio Answer ----
 app.post("/answer", (req, res) => {
   const twiml = `
     <Response>
@@ -156,7 +156,6 @@ app.post("/answer", (req, res) => {
       </Connect>
     </Response>
   `;
-
   res.set("Content-Type", "text/xml");
   res.send(twiml);
 });
