@@ -21,12 +21,12 @@ const client = Twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH);
 // ---- WebSocket Server ----
 const wss = new WebSocketServer({ noServer: true });
 
-// ---- Start Server ----
+// ---- Start HTTP Server ----
 app.server = app.listen(PORT, () => {
   console.log("🚀 Alya Voice Server Active → PORT", PORT);
 });
 
-// ---- Upgrade Handler for Twilio Streams ----
+// ---- Upgrade Handler ----
 app.server.on("upgrade", (request, socket, head) => {
   if (request.url === "/ws") {
     wss.handleUpgrade(request, socket, head, (ws) => {
@@ -38,27 +38,27 @@ app.server.on("upgrade", (request, socket, head) => {
 });
 
 // =========================
-//      ALYA AI LOGIC
+//       TWILIO STREAM
 // =========================
 
 wss.on("connection", async (ws) => {
-  console.log("🔌 Twilio connected to WS.");
+  console.log("🔌 Twilio connected to WebSocket stream.");
 
-  // Connect to OpenAI Realtime API
+  // Connect to OpenAI Realtime WebSocket
   const openAiWs = new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
     {
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "OpenAI-Beta": "realtime=v1",
-      }
+      },
     }
   );
 
   openAiWs.on("open", () => {
-    console.log("🧠 OpenAI Realtime WebSocket Connected.");
+    console.log("🧠 Connected to OpenAI Realtime API.");
 
-    // Alya's initial personality / instructions
+    // Alya's personality
     openAiWs.send(
       JSON.stringify({
         type: "response.create",
@@ -66,59 +66,56 @@ wss.on("connection", async (ws) => {
           modalities: ["audio"],
           instructions: `
 Senin adın Alya.
-Sıcakkanlı, samimi, profesyonel ve espirili bir Türkçe çağrı asistanısın.
-Arayan kişinin cümlelerini doğal bir şekilde anla.
+Sıcakkanlı, profesyonel, samimi ve esprili bir Türkçe çağrı asistanısın.
+Karşı tarafla doğal ve kısa cümlelerle konuş.
 Argo kullanma.
-Kısa ve net konuş.
-Randevu oluşturmaya odaklan.
+Müşteriyi randevuya yönlendirmeye odaklan.
 `
-        }
+        },
       })
     );
   });
 
-  // ---- OpenAI ---> Twilio (Audio Out) ----
+  // ---- OpenAI → Twilio (Audio Output) ----
   openAiWs.on("message", (data) => {
     try {
-      const event = JSON.parse(data);
+      const json = JSON.parse(data);
 
-      // Doğru realtime event formatı
-      if (event.type === "response.output_audio.delta") {
+      if (json.type === "response.output_audio.delta") {
         ws.send(
           JSON.stringify({
             event: "media",
             media: {
-              payload: event.audio_base64 // Twilio expected base64 audio
-            }
+              payload: json.audio_base64, // Twilio expects base64 audio
+            },
           })
         );
       }
     } catch (err) {
-      console.log("OpenAI JSON error:", err);
+      console.log("❗ OpenAI JSON parse error:", err);
     }
   });
 
-  // ---- Twilio ---> OpenAI (Audio In) ----
+  // ---- Twilio → OpenAI (Audio Input) ----
   ws.on("message", (msg) => {
     const data = JSON.parse(msg);
 
     if (data.event === "media") {
-      // Caller audio → OpenAI
       openAiWs.send(
         JSON.stringify({
           type: "input_audio_buffer.append",
-          audio: data.media.payload  // Twilio base64 audio
+          audio: data.media.payload, // base64 audio from Twilio
         })
       );
     }
 
     if (data.event === "start") {
-      console.log("📞 Twilio Stream started.");
+      console.log("📞 Twilio stream started.");
       openAiWs.send(JSON.stringify({ type: "response.create" }));
     }
 
     if (data.event === "stop") {
-      console.log("📞 Twilio Stream stopped.");
+      console.log("📞 Twilio stream stopped.");
       openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
     }
   });
@@ -129,17 +126,22 @@ Randevu oluşturmaya odaklan.
   });
 });
 
-// Static UI
+// =========================
+//        STATIC FILES
+// =========================
+
 app.use(express.static(path.join(__dirname, "public")));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 
-// Panel
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "panel.html"));
 });
 
-// API: Trigger call
+// =========================
+//   OUTBOUND CALL TRIGGER
+// =========================
+
 app.post("/call-customer", async (req, res) => {
   try {
     const { number } = req.body;
@@ -152,20 +154,36 @@ app.post("/call-customer", async (req, res) => {
 
     return res.json({ ok: true, sid: call.sid });
   } catch (e) {
+    console.error("TWILIO CALL ERROR:", e.message);
     return res.json({ ok: false, error: e.message });
   }
 });
 
-// Twilio Answer URL
-app.post("/answer", (req, res) => {
-  const twiml = `
+// =========================
+//     TWIML ENDPOINTS
+// =========================
+
+// TwiML factory
+function createTwiml(host) {
+  return `
     <Response>
       <Connect>
-        <Stream url="wss://${req.headers.host}/ws" />
+        <Stream url="wss://${host}/ws" />
       </Connect>
     </Response>
   `;
+}
 
+// Primary correct endpoint
+app.post("/answer", (req, res) => {
+  const twiml = createTwiml(req.headers.host);
+  res.set("Content-Type", "text/xml");
+  res.send(twiml);
+});
+
+// Backup endpoint (Twilio bazen eski URL'i cache'ler → çözüyoruz)
+app.post("/call", (req, res) => {
+  const twiml = createTwiml(req.headers.host);
   res.set("Content-Type", "text/xml");
   res.send(twiml);
 });
