@@ -1,15 +1,17 @@
 {
   "name": "alya-call-system",
   "version": "1.0.0",
+  "description": "Alya AI realtime Twilio call system",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "body-parser": "^1.20.2",
-    "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "twilio": "^4.22.0"
+    "body-parser": "^1.20.2",
+    "dotenv": "^16.4.0",
+    "twilio": "^4.21.0",
+    "ws": "^8.13.0"
   }
 }
