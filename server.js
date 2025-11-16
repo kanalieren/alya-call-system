@@ -1,69 +1,77 @@
 import express from "express";
+import bodyParser from "body-parser";
 import dotenv from "dotenv";
 import Twilio from "twilio";
-import OpenAI from "openai";
-import fetch from "node-fetch";
+import path from "path";
+import { fileURLToPath } from "url";
 
 dotenv.config();
 
 const app = express();
-app.use(express.json());
+const PORT = process.env.PORT || 10000;
 
-// ----------------------
-// TWILIO AYARLARI
-// ----------------------
-const twilioClient = Twilio(
-    process.env.TWILIO_SID,
-    process.env.TWILIO_AUTH_TOKEN
+// Twilio client
+const client = Twilio(
+  process.env.TWILIO_SID,
+  process.env.TWILIO_AUTH
 );
 
-// ----------------------
-// OPENAI AYARLARI
-// ----------------------
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
+// Render için gerekli
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Middleware
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
+
+// Public klasör
+app.use(express.static(path.join(__dirname, "public")));
+
+// Panel route
+app.get("/panel", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "panel.html"));
 });
 
-// ----------------------
-// PANEL → ARAMA BAŞLAT
-// ----------------------
-app.post("/call", async (req, res) => {
-    const number = req.body.number;
+// Twilio: Gelen aramayı kontrol et
+app.post("/call", (req, res) => {
+  console.log("Twilio webhook geldi:", req.body);
 
-    if (!number) {
-        return res.json({ ok: false, error: "Numara alınamadı." });
-    }
-
-    try {
-        const call = await twilioClient.calls.create({
-            to: number,
-            from: process.env.TWILIO_NUMBER,
-            url: "https://alya-call-system.onrender.com/call-handler"
-        });
-
-        res.json({ ok: true, sid: call.sid });
-
-    } catch (err) {
-        res.json({ ok: false, error: err.message });
-    }
-});
-
-// ----------------------
-// TWILIO → SESİ YÖNET
-// ----------------------
-app.post("/call-handler", async (req, res) => {
-    res.set("Content-Type", "text/xml");
-
-    const twiml = `
+  res.set("Content-Type", "text/xml");
+  res.send(`
     <Response>
-        <Say voice="Polly.Burcu">Merhaba. Bu bir test çağrısıdır.</Say>
+        <Say voice="alice">Alya sistemi çalışıyor.</Say>
     </Response>
-    `;
-
-    res.send(twiml);
+  `);
 });
 
-// ----------------------
-app.listen(10000, () => {
-    console.log("Alya sistemi çalışıyor → PORT 10000");
+// Panelden gelen istek → Arama başlatır
+app.post("/call-customer", async (req, res) => {
+  const { number } = req.body;
+
+  console.log("Arama isteği alındı:", number);
+
+  if (!number || number.length < 7) {
+    return res.json({ ok: false, error: "Geçersiz müşteri numarası." });
+  }
+
+  try {
+    const call = await client.calls.create({
+      url: process.env.TWILIO_URL, // Twilio'nun çalacağı XML URL
+      to: number,
+      from: process.env.TWILIO_NUMBER
+    });
+
+    console.log("Arama başlatıldı:", call.sid);
+
+    return res.json({ ok: true, sid: call.sid });
+
+  } catch (err) {
+    console.error("Arama hatası:", err);
+    return res.json({ ok: false, error: "Arama başlatılamadı." });
+  }
+});
+
+// Sunucu dinlemeye başlasın
+app.listen(PORT, () => {
+  console.log(`🚀 Alya sistemi çalışıyor → PORT ${PORT}`);
 });
