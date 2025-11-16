@@ -5,7 +5,6 @@ import Twilio from "twilio";
 import path from "path";
 import { fileURLToPath } from "url";
 import WebSocket, { WebSocketServer } from "ws";
-import OpenAI from "openai";
 
 dotenv.config();
 
@@ -37,12 +36,16 @@ app.server.on("upgrade", (request, socket, head) => {
   }
 });
 
-// =========================
-//       TWILIO STREAM
-// =========================
+// ==========================================================
+//                TWILIO MEDIA STREAM LOGIC
+// ==========================================================
 
 wss.on("connection", async (ws) => {
   console.log("🔌 Twilio connected to WebSocket stream.");
+
+  // FIX: OpenAI WS durumu
+  let openaiReady = false;
+  let twilioQueue = [];
 
   // Connect to OpenAI Realtime WebSocket
   const openAiWs = new WebSocket(
@@ -55,28 +58,39 @@ wss.on("connection", async (ws) => {
     }
   );
 
+  // ---------------------------------------------
+  //           OPENAI RECONNECTED & READY
+  // ---------------------------------------------
   openAiWs.on("open", () => {
-    console.log("🧠 Connected to OpenAI Realtime API.");
+    console.log("🧠 OpenAI Realtime ready.");
+    openaiReady = true;
 
-    // Alya's personality
-    openAiWs.send(
-      JSON.stringify({
-        type: "response.create",
-        response: {
-          modalities: ["audio"],
-          instructions: `
+    // Alya personality
+    const intro = JSON.stringify({
+      type: "response.create",
+      response: {
+        modalities: ["audio"],
+        instructions: `
 Senin adın Alya.
-Sıcakkanlı, profesyonel, samimi ve esprili bir Türkçe çağrı asistanısın.
-Karşı tarafla doğal ve kısa cümlelerle konuş.
-Argo kullanma.
-Müşteriyi randevuya yönlendirmeye odaklan.
+Sıcakkanlı, samimi, profesyonel ve esprili bir Türkçe çağrı asistanısın.
+Doğal konuş, kısa cevap ver, argo kullanma.
+Müşteriyi randevuya yönlendir.
 `
-        },
-      })
-    );
+      }
+    });
+
+    openAiWs.send(intro);
+
+    // Twilio’dan erken gelen tüm mesajları gönder
+    for (const buffered of twilioQueue) {
+      openAiWs.send(buffered);
+    }
+    twilioQueue = [];
   });
 
-  // ---- OpenAI → Twilio (Audio Output) ----
+  // ---------------------------------------------
+  //        OPENAI → TWILIO (AUDIO OUTPUT)
+  // ---------------------------------------------
   openAiWs.on("message", (data) => {
     try {
       const json = JSON.parse(data);
@@ -86,7 +100,7 @@ Müşteriyi randevuya yönlendirmeye odaklan.
           JSON.stringify({
             event: "media",
             media: {
-              payload: json.audio_base64, // Twilio expects base64 audio
+              payload: json.audio_base64, // Twilio accepted audio
             },
           })
         );
@@ -96,39 +110,52 @@ Müşteriyi randevuya yönlendirmeye odaklan.
     }
   });
 
-  // ---- Twilio → OpenAI (Audio Input) ----
+  // ---------------------------------------------
+  //        TWILIO → OPENAI (AUDIO INPUT)
+  // ---------------------------------------------
   ws.on("message", (msg) => {
     const data = JSON.parse(msg);
 
+    // ---- MEDIA (audio packet) ----
     if (data.event === "media") {
-      openAiWs.send(
-        JSON.stringify({
-          type: "input_audio_buffer.append",
-          audio: data.media.payload, // base64 audio from Twilio
-        })
-      );
+      const payload = JSON.stringify({
+        type: "input_audio_buffer.append",
+        audio: data.media.payload,
+      });
+
+      if (openaiReady) openAiWs.send(payload);
+      else twilioQueue.push(payload);
     }
 
+    // ---- STREAM START ----
     if (data.event === "start") {
       console.log("📞 Twilio stream started.");
-      openAiWs.send(JSON.stringify({ type: "response.create" }));
+      const startMsg = JSON.stringify({ type: "response.create" });
+
+      if (openaiReady) openAiWs.send(startMsg);
+      else twilioQueue.push(startMsg);
     }
 
+    // ---- STREAM STOP ----
     if (data.event === "stop") {
       console.log("📞 Twilio stream stopped.");
-      openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+      const stopMsg = JSON.stringify({ type: "input_audio_buffer.commit" });
+
+      if (openaiReady) openAiWs.send(stopMsg);
+      else twilioQueue.push(stopMsg);
     }
   });
 
+  // ---- WebSocket close cleanup ----
   ws.on("close", () => {
     console.log("❌ Twilio disconnected.");
     openAiWs.close();
   });
 });
 
-// =========================
-//        STATIC FILES
-// =========================
+// ==========================================================
+//                   STATIC PANEL + API
+// ==========================================================
 
 app.use(express.static(path.join(__dirname, "public")));
 app.use(bodyParser.json());
@@ -138,9 +165,9 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "panel.html"));
 });
 
-// =========================
-//   OUTBOUND CALL TRIGGER
-// =========================
+// ==========================================================
+//                OUTBOUND CALL TRIGGER
+// ==========================================================
 
 app.post("/call-customer", async (req, res) => {
   try {
@@ -159,11 +186,10 @@ app.post("/call-customer", async (req, res) => {
   }
 });
 
-// =========================
-//     TWIML ENDPOINTS
-// =========================
+// ==========================================================
+//                TWIML ENDPOINTS (CALL + ANSWER)
+// ==========================================================
 
-// TwiML factory
 function createTwiml(host) {
   return `
     <Response>
@@ -174,18 +200,18 @@ function createTwiml(host) {
   `;
 }
 
-// Primary correct endpoint
+// Twilio should hit here
 app.post("/answer", (req, res) => {
-  const twiml = createTwiml(req.headers.host);
+  const xml = createTwiml(req.headers.host);
   res.set("Content-Type", "text/xml");
-  res.send(twiml);
+  res.send(xml);
 });
 
-// Backup endpoint (Twilio bazen eski URL'i cache'ler → çözüyoruz)
+// Twilio cached "old" URL fallback
 app.post("/call", (req, res) => {
-  const twiml = createTwiml(req.headers.host);
+  const xml = createTwiml(req.headers.host);
   res.set("Content-Type", "text/xml");
-  res.send(twiml);
+  res.send(xml);
 });
 
 console.log("✔ Server.js fully loaded.");
