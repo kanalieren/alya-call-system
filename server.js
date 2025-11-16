@@ -27,12 +27,12 @@ app.use(bodyParser.json());
 // Public klasör
 app.use(express.static(path.join(__dirname, "public")));
 
-// Paneli göster
+// PANEL
 app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "public", "panel.html"));
 });
 
-// Kullanıcı arama endpoint
+// OUTGOING CALL ENDPOINT
 app.post("/call-customer", async (req, res) => {
     try {
         const { number } = req.body;
@@ -42,7 +42,7 @@ app.post("/call-customer", async (req, res) => {
         }
 
         const call = await client.calls.create({
-            url: process.env.TWILIO_VOICE_URL, // Twilio’nun call webhooku
+            url: process.env.TWILIO_VOICE_URL,
             to: number,
             from: process.env.TWILIO_NUMBER,
         });
@@ -54,18 +54,20 @@ app.post("/call-customer", async (req, res) => {
     }
 });
 
-// Twilio webhook -> Müşteri açınca çalacak ses
+// TWILIO → MÜŞTERİYİ ARAYINCA ÇALAN SES
 app.post("/call", (req, res) => {
     const twiml = `
         <Response>
-            <Say voice="Polly.Berenice">Merhaba. Bu bir test çağrısıdır.</Say>
+            <Say voice="Polly.Filiz" language="tr-TR">
+                Merhaba. Bu bir test çağrısıdır. Alya arama sistemi başarıyla çalışmaktadır.
+            </Say>
         </Response>
     `;
     res.set("Content-Type", "text/xml");
     res.send(twiml);
 });
 
-// Server
+// SERVER
 app.listen(PORT, () => {
     console.log("Alya sistemi çalışıyor → PORT", PORT);
 });
